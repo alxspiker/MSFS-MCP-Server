@@ -1569,7 +1569,7 @@ def set_event_state(group: str, event: str, value: Optional[int] = 0) -> Dict[st
         "climb to target altitude, then release controls. Returns an autopilot_id used to query or stop it."
     )
 )
-def engage_takeoff_autopilot(
+async def engage_takeoff_autopilot(
     runway_heading_deg: float,
     vr_knots: float,
     v2_knots: float,
@@ -1591,7 +1591,7 @@ def engage_takeoff_autopilot(
         "Tracks runway heading and a glideslope, performs a flare, and rolls out. Returns an autopilot_id."
     )
 )
-def engage_landing_autopilot(
+async def engage_landing_autopilot(
     runway_heading_deg: float,
     vref_knots: float,
     glideslope_deg: float = 3.0,
@@ -1608,11 +1608,8 @@ def engage_landing_autopilot(
 
 
 @mcp.tool(description="Stop an external autopilot instance by id.")
-def stop_autopilot(autopilot_id: str) -> bool:
-    # Note: This still needs to be called in an async context for the internal await
-    import asyncio
-    loop = asyncio.get_event_loop()
-    return loop.run_until_complete(autopilot_manager.stop(autopilot_id))
+async def stop_autopilot(autopilot_id: str) -> bool:
+    return await autopilot_manager.stop(autopilot_id)
 
 
 @mcp.tool(
