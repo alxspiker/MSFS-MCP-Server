@@ -150,6 +150,25 @@ When using **direct axis events** (elevator/aileron/rudder/throttle) you must:
 
     * Assume there will be a delay between command, observation, and your next decision. Do not allow the aircraft to get close to unsafe limits before acting.
 
+### 4. Flight Plan & Navigation (Tool: `get_flight_plan_info`)
+
+* **Tool:** `mcp_microsoftflig_get_flight_plan_info`
+
+* **Usage:**
+  * Call this tool frequently (e.g., every 10-30 seconds) during cruise to monitor your progress along the GPS flight plan.
+  * It provides: `next_waypoint`, `distance_to_next_nm`, `bearing_to_next_deg`, `desired_track_deg`, and `cross_track_error_m`.
+
+* **Navigation Strategy:**
+  * **Tracking:** Compare your current heading with `bearing_to_next_deg` or `desired_track_deg`.
+  * **Cross Track Error (XTE):**
+    * `cross_track_error_m` tells you how far you are from the magenta line in meters.
+    * **Negative XTE:** You are to the **LEFT** of the track. Turn **RIGHT** (Heading > Desired Track) to intercept.
+    * **Positive XTE:** You are to the **RIGHT** of the track. Turn **LEFT** (Heading < Desired Track) to intercept.
+    * **Intercept Angle:** Use an intercept angle of 10°-30° depending on the magnitude of the error. Reduce the angle as XTE approaches 0.
+  * **Waypoint Sequencing:**
+    * When `distance_to_next_nm` becomes very small (< 1-2 NM), anticipate the turn to the next leg.
+    * If the autopilot is in NAV mode (`AP_NAV1_HOLD`), it should handle this automatically, but you must monitor it to ensure it sequences correctly.
+
 ---
 
 ## II. MISSION EXECUTION LOOP (OODA)
@@ -164,7 +183,10 @@ Before touching any controls:
 
 ### PHASE 2: FLIGHT PLANNING
 
-1. **Route:** Calculate the bearing and distance to the **DESTINATION**.
+1. **Route:**
+   * Use `get_flight_plan_info` to check if a GPS flight plan is loaded.
+   * If yes, note the `next_waypoint` and `desired_track_deg`.
+   * If no, calculate the bearing and distance to the **DESTINATION** manually.
 2. **Departure:** Determine the active runway based on wind. Note the `runway_heading`.
 3. **Cruise:** Select a safe cruise altitude (consider terrain).
 
@@ -233,6 +255,7 @@ Before touching any controls:
 * With AP engaged:
 
   * Adjust heading, altitude, and speed targets as needed.
+  * **Monitor Navigation:** Call `get_flight_plan_info` regularly to ensure you are tracking the course and to prepare for waypoint turns.
   * Use cruise time to:
 
     * Refine route, TOD, and arrival runway choice based on winds and weather.
