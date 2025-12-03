@@ -1498,11 +1498,11 @@ def dispatch_method(method: str, params: Dict[str, Any]) -> Any:
 
 
 @mcp.tool(description="Apply multiple SimConnect events sequentially")
-async def set_event_states(operations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def set_event_states(operations: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not operations:
         raise HTTPException(400, "operations list required")
     try:
-        return await _call_msfs(msfs.set_event_states, operations)
+        return msfs.set_event_states(operations)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1513,40 +1513,40 @@ async def set_event_states(operations: List[Dict[str, Any]]) -> List[Dict[str, A
 
 
 @mcp.tool(description="List available SimConnect helper groups")
-async def list_simvar_groups() -> List[Dict[str, Any]]:
-    return await _call_msfs(msfs.list_state_groups)
+def list_simvar_groups() -> List[Dict[str, Any]]:
+    return msfs.list_state_groups()
 
 
 @mcp.tool(description="Dump SimVars from a specific helper group. See list_simvar_groups() for available groups. The Strings group contains the plane name and other useful information to get started. IMPORTANT: For aircraft heading, use WISKEY_COMPASS_INDICATION_DEGREES from FlightInstrumentationData group - this is the actual compass heading visible in the cockpit. PLANE_HEADING_DEGREES_TRUE/MAGNETIC from PositionandSpeedData may show incorrect values during ground movement.")
-async def get_simvar_group_state(
+def get_simvar_group_state(
     group: Optional[str] = None,
     include_groups: bool = False,
     as_lines: bool = False,
 ):
-    return await _call_msfs(msfs.get_state, as_lines, group, include_groups)
+    return msfs.get_state(as_lines, group, include_groups)
 
 
 @mcp.tool(description="List available SimConnect event helper groups")
-async def list_event_groups(include_events: bool = False) -> List[Dict[str, Any]]:
-    return await _call_msfs(msfs.list_event_groups, include_events)
+def list_event_groups(include_events: bool = False) -> List[Dict[str, Any]]:
+    return msfs.list_event_groups(include_events)
 
 
 @mcp.tool(description="Get all events inside a specific helper group")
-async def get_event_group_details(group: str) -> Dict[str, Any]:
+def get_event_group_details(group: str) -> Dict[str, Any]:
     if not group:
         raise HTTPException(400, "group required")
     try:
-        return await _call_msfs(msfs.get_event_group, group)
+        return msfs.get_event_group(group)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
 
 @mcp.tool(description="Send a SimConnect event with an optional value")
-async def set_event_state(group: str, event: str, value: Optional[int] = 0) -> Dict[str, Any]:
+def set_event_state(group: str, event: str, value: Optional[int] = 0) -> Dict[str, Any]:
     if not group or not event:
         raise HTTPException(400, "group and event required")
     try:
-        return await _call_msfs(msfs.set_event_state, group, event, value)
+        return msfs.set_event_state(group, event, value)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
 
@@ -1569,7 +1569,7 @@ async def set_event_state(group: str, event: str, value: Optional[int] = 0) -> D
         "climb to target altitude, then release controls. Returns an autopilot_id used to query or stop it."
     )
 )
-async def engage_takeoff_autopilot(
+def engage_takeoff_autopilot(
     runway_heading_deg: float,
     vr_knots: float,
     v2_knots: float,
@@ -1591,7 +1591,7 @@ async def engage_takeoff_autopilot(
         "Tracks runway heading and a glideslope, performs a flare, and rolls out. Returns an autopilot_id."
     )
 )
-async def engage_landing_autopilot(
+def engage_landing_autopilot(
     runway_heading_deg: float,
     vref_knots: float,
     glideslope_deg: float = 3.0,
@@ -1608,8 +1608,11 @@ async def engage_landing_autopilot(
 
 
 @mcp.tool(description="Stop an external autopilot instance by id.")
-async def stop_autopilot(autopilot_id: str) -> bool:
-    return await autopilot_manager.stop(autopilot_id)
+def stop_autopilot(autopilot_id: str) -> bool:
+    # Note: This still needs to be called in an async context for the internal await
+    import asyncio
+    loop = asyncio.get_event_loop()
+    return loop.run_until_complete(autopilot_manager.stop(autopilot_id))
 
 
 @mcp.tool(
@@ -1618,13 +1621,114 @@ async def stop_autopilot(autopilot_id: str) -> bool:
         "If autopilot_id is omitted, returns all known statuses."
     )
 )
-async def get_autopilot_status(autopilot_id: Optional[str] = None) -> Any:
+def get_autopilot_status(autopilot_id: Optional[str] = None) -> Any:
     if autopilot_id:
         status = autopilot_manager.get_status(autopilot_id)
         if status is None:
             raise HTTPException(404, f"Unknown autopilot id: {autopilot_id}")
         return status.dict()
     return [s.dict() for s in autopilot_manager.list_statuses()]
+
+
+# --------- Flight Plan MCP tools --------- #
+
+
+def _get_flight_plan_sync() -> Dict[str, Any]:
+    """Synchronous helper to get flight plan info."""
+    msfs._ensure_connected()
+    aq = msfs._reqs()
+    
+    result = {
+        "has_active_flight_plan": False,
+        "total_waypoints": 0,
+        "current_waypoint_index": 0,
+        "previous_waypoint": None,
+        "next_waypoint": None,
+        "distance_to_next_nm": 0,
+        "distance_to_next_m": 0,
+        "ete_seconds": 0,
+        "ete_minutes": 0,
+        "bearing_to_next_deg": 0,
+        "cross_track_error_m": 0,
+        "desired_track_deg": 0,
+    }
+    
+    # Check if flight plan is active
+    is_active = aq.get("GPS_IS_ACTIVE_FLIGHT_PLAN")
+    if not is_active:
+        return result
+    
+    result["has_active_flight_plan"] = True
+    
+    # Get counts
+    wp_count = aq.get("GPS_FLIGHT_PLAN_WP_COUNT")
+    current_index = aq.get("GPS_FLIGHT_PLAN_WP_INDEX")
+    result["total_waypoints"] = int(wp_count) if wp_count else 0
+    result["current_waypoint_index"] = int(current_index) if current_index else 0
+    
+    # Get active leg waypoint IDs
+    prev_id = aq.get("GPS_WP_PREV_ID")
+    next_id = aq.get("GPS_WP_NEXT_ID")
+    
+    # Decode bytes if necessary
+    if isinstance(prev_id, bytes):
+        prev_id = prev_id.decode('utf-8', errors='ignore').rstrip('\x00')
+    if isinstance(next_id, bytes):
+        next_id = next_id.decode('utf-8', errors='ignore').rstrip('\x00')
+    
+    result["previous_waypoint"] = prev_id if prev_id else None
+    result["next_waypoint"] = next_id if next_id else None
+    
+    # Get next waypoint details
+    next_lat = aq.get("GPS_WP_NEXT_LAT")
+    next_lon = aq.get("GPS_WP_NEXT_LON")
+    next_alt = aq.get("GPS_WP_NEXT_ALT")
+    
+    if next_lat is not None and next_lon is not None:
+        result["next_waypoint_lat"] = float(next_lat)
+        result["next_waypoint_lon"] = float(next_lon)
+        result["next_waypoint_alt_m"] = float(next_alt) if next_alt else 0
+    
+    # Distance and timing
+    dist = aq.get("GPS_WP_DISTANCE")
+    ete = aq.get("GPS_WP_ETE")
+    
+    if dist is not None:
+        result["distance_to_next_m"] = float(dist)
+        result["distance_to_next_nm"] = float(dist) / 1852.0
+    
+    if ete is not None:
+        result["ete_seconds"] = float(ete)
+        result["ete_minutes"] = float(ete) / 60.0
+    
+    # Bearing and track
+    bearing = aq.get("GPS_WP_BEARING")
+    desired_track = aq.get("GPS_WP_DESIRED_TRACK")
+    cross_track = aq.get("GPS_WP_CROSS_TRK")
+    
+    if bearing is not None:
+        # Convert from radians to degrees
+        result["bearing_to_next_deg"] = float(bearing) * (180.0 / 3.14159265359)
+    
+    if desired_track is not None:
+        result["desired_track_deg"] = float(desired_track) * (180.0 / 3.14159265359)
+    
+    if cross_track is not None:
+        result["cross_track_error_m"] = float(cross_track)
+    
+    return result
+
+
+@mcp.tool(
+    description=(
+        "Get the active flight plan information including the next waypoint. "
+        "Returns the current and next waypoint IDs, position, distance, ETE, and bearing. "
+        "Use this to track progress along a loaded flight plan."
+    )
+)
+def get_flight_plan_info() -> Dict[str, Any]:
+    """Get active flight plan and next waypoint information."""
+    return _get_flight_plan_sync()
 
 
 if __name__ == "__main__":
